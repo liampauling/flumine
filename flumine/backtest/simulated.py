@@ -84,7 +84,18 @@ class Simulated:
                         size,
                         runner.ex.available_to_back,
                     )
-                    return self._create_place_response(bet_id)
+                    if self._should_expire():
+                        order_status = "EXPIRED"
+                        self.order.expired()
+                    else:
+                        order_status = "EXECUTABLE"
+                    return self._create_place_response(
+                        bet_id,
+                        order_status=order_status,
+                    )
+                elif self.order.order_type.time_in_force == "FILL_OR_KILL":
+                    self.order.expired()
+                    return self._create_place_response(bet_id, order_status="EXPIRED")
                 available = runner.ex.available_to_lay
             else:
                 if not client.best_price_execution and available_to_lay < price:
@@ -100,7 +111,18 @@ class Simulated:
                         size,
                         runner.ex.available_to_lay,
                     )
-                    return self._create_place_response(bet_id)
+                    if self._should_expire():
+                        order_status = "EXPIRED"
+                        self.order.expired()
+                    else:
+                        order_status = "EXECUTABLE"
+                    return self._create_place_response(
+                        bet_id,
+                        order_status=order_status,
+                    )
+                elif self.order.order_type.time_in_force == "FILL_OR_KILL":
+                    self.order.expired()
+                    return self._create_place_response(bet_id, order_status="EXPIRED")
                 available = runner.ex.available_to_back
 
             # calculate position in queue
@@ -117,11 +139,15 @@ class Simulated:
             return self._create_place_response(bet_id)
 
     def _create_place_response(
-        self, bet_id: int, status: str = "SUCCESS", error_code: str = None
+        self,
+        bet_id: int,
+        status: str = "SUCCESS",
+        error_code: str = None,
+        order_status: str = "EXECUTABLE",
     ) -> SimulatedPlaceResponse:
         return SimulatedPlaceResponse(
             status=status,
-            order_status="EXECUTABLE",  # todo?
+            order_status=order_status,
             bet_id=str(bet_id),
             average_price_matched=self.average_price_matched,
             size_matched=self.size_matched,
@@ -178,6 +204,7 @@ class Simulated:
     ) -> None:
         # calculate matched on execution
         size_remaining = size
+        _matches = []
         for avail in available:
             if size_remaining == 0:
                 break
@@ -191,9 +218,24 @@ class Simulated:
                 else:
                     _size_matched = avail["size"]
                 _matched = [publish_time, avail["price"], round(_size_matched, 2)]
-                self._update_matched(_matched)
+                _matches.append(_matched)
             else:
                 break
+
+        if self.order.order_type.time_in_force == "FILL_OR_KILL":
+            if size_remaining == 0:
+                self._update_multi_matched(lst_data=_matches)
+            elif self.order.order_type.min_fill_size:
+                filled_size = size - size_remaining
+                if filled_size >= self.order.order_type.min_fill_size:
+                    self._update_multi_matched(lst_data=_matches)
+        else:
+            self._update_multi_matched(lst_data=_matches)
+
+    def _update_multi_matched(self, lst_data: List) -> None:
+        logger.debug("Simulated order {0} matched: {1}".format(self.order.id, lst_data))
+        self.matched.extend(lst_data)
+        self.size_matched, self.average_price_matched = wap(self.matched)
 
     def _process_sp(self, publish_time: int, runner: RunnerBook) -> None:
         # calculate matched on BSP reconciliation
@@ -338,3 +380,9 @@ class Simulated:
 
     def __bool__(self):
         return config.simulated or self.order.trade.client.paper_trade
+
+    def _should_expire(self) -> bool:
+        # It is implicitly assumed that this will only be called if the order is a limit order.
+        if self.order.order_type.time_in_force == "FILL_OR_KILL":
+            if len(self.matched) == 0:
+                return True

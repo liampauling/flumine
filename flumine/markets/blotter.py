@@ -129,10 +129,15 @@ class Blotter:
                         else:
                             ml.append((order.average_price_matched, order.size_matched))
                     if order.order_type.price and order.size_remaining:
-                        if order.side == "BACK":
-                            ub.append((order.order_type.price, order.size_remaining))
-                        else:
-                            ul.append((order.order_type.price, order.size_remaining))
+                        if not order.complete:
+                            if order.side == "BACK":
+                                ub.append(
+                                    (order.order_type.price, order.size_remaining)
+                                )
+                            else:
+                                ul.append(
+                                    (order.order_type.price, order.size_remaining)
+                                )
                 elif order.order_type.ORDER_TYPE in (
                     OrderTypes.LIMIT_ON_CLOSE,
                     OrderTypes.MARKET_ON_CLOSE,
